@@ -1,0 +1,241 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  STUDENT
+  TEACHER
+  ADMIN
+}
+
+enum SchoolLevel {
+  SMP
+  SMA
+}
+
+enum Priority {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum TaskStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  DONE
+}
+
+enum ReminderType {
+  SCHEDULE
+  TASK_DEADLINE
+}
+
+enum ReminderFrequency {
+  ONCE
+  DAILY
+  WEEKLY
+}
+
+enum FocusStatus {
+  RUNNING
+  PAUSED
+  COMPLETED
+  SKIPPED
+}
+
+// Data seminimal mungkin: tidak menyimpan alamat, nomor telepon, dsb.
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  username     String   @unique
+  passwordHash String
+  role         Role
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  studentProfile StudentProfile?
+  teacherProfile TeacherProfile?
+
+  tasks         Task[]
+  schedules     StudySchedule[]
+  reminders     Reminder[]
+  focusSessions FocusSession[]
+  reflections   WeeklyReflection[]
+  helpRequests  HelpRequest[]
+
+  consentsGiven    SharedProgressConsent[] @relation("ConsentStudent")
+  consentsReceived SharedProgressConsent[] @relation("ConsentTeacher")
+
+  @@map("users")
+}
+
+model StudentProfile {
+  id          String      @id @default(cuid())
+  userId      String      @unique
+  schoolLevel SchoolLevel
+  grade       Int?
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("student_profiles")
+}
+
+model TeacherProfile {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("teacher_profiles")
+}
+
+model Task {
+  id               String     @id @default(cuid())
+  userId           String
+  title            String
+  subject          String?
+  priority         Priority   @default(MEDIUM)
+  status           TaskStatus @default(NOT_STARTED)
+  dueDate          DateTime?
+  estimatedMinutes Int?
+  notes            String?
+  completedAt      DateTime?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  steps         TaskStep[]
+  schedules     StudySchedule[]
+  reminders     Reminder[]
+  focusSessions FocusSession[]
+
+  @@index([userId, status])
+  @@index([userId, dueDate])
+  @@map("tasks")
+}
+
+model TaskStep {
+  id        String   @id @default(cuid())
+  taskId    String
+  title     String
+  position  Int
+  isDone    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, position])
+  @@map("task_steps")
+}
+
+model StudySchedule {
+  id          String  @id @default(cuid())
+  userId      String
+  taskId      String?
+  title       String
+  subject     String?
+  dayOfWeek   Int // 1 = Senin ... 7 = Minggu
+  startMinute Int // menit sejak 00:00, mis. 08:00 = 480
+  endMinute   Int
+  isBreak     Boolean @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task      Task?      @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  reminders Reminder[]
+
+  @@index([userId, dayOfWeek])
+  @@map("study_schedules")
+}
+
+model Reminder {
+  id         String            @id @default(cuid())
+  userId     String
+  type       ReminderType
+  taskId     String?
+  scheduleId String?
+  remindAt   Int // menit sejak 00:00
+  frequency  ReminderFrequency @default(ONCE)
+  enabled    Boolean           @default(true)
+  createdAt  DateTime          @default(now())
+
+  user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task     Task?          @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  schedule StudySchedule? @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
+  @@index([userId, enabled])
+  @@map("reminders")
+}
+
+model FocusSession {
+  id             String      @id @default(cuid())
+  userId         String
+  taskId         String?
+  plannedMinutes Int         @default(25)
+  actualSeconds  Int         @default(0)
+  status         FocusStatus @default(RUNNING)
+  startedAt      DateTime    @default(now())
+  endedAt        DateTime?
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task Task? @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@index([userId, startedAt])
+  @@map("focus_sessions")
+}
+
+model WeeklyReflection {
+  id        String   @id @default(cuid())
+  userId    String
+  weekStart DateTime @db.Date // tanggal Senin pada minggu refleksi
+  // Array jawaban per pertanyaan: [{ "q": 1, "answer": "..." }, ...]
+  // Daftar enam pertanyaan resmi diisi dari proposal (lihat README).
+  answers   Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, weekStart])
+  @@map("weekly_reflections")
+}
+
+// Hanya dipakai jika fitur berbagi perkembangan dikembangkan.
+// Tanpa baris aktif di sini, Guru BK tidak boleh melihat data siswa.
+model SharedProgressConsent {
+  id        String    @id @default(cuid())
+  studentId String
+  teacherId String
+  purpose   String
+  scope     String // mis. "PROGRESS_SUMMARY" (bukan refleksi pribadi)
+  grantedAt DateTime  @default(now())
+  revokedAt DateTime?
+
+  student User @relation("ConsentStudent", fields: [studentId], references: [id], onDelete: Cascade)
+  teacher User @relation("ConsentTeacher", fields: [teacherId], references: [id], onDelete: Cascade)
+
+  @@index([studentId, teacherId])
+  @@map("shared_progress_consents")
+}
+
+// Prototipe formulir permintaan pendampingan Guru BK (tanpa data pribadi siswa).
+model HelpRequest {
+  id        String   @id @default(cuid())
+  teacherId String
+  topic     String
+  message   String
+  createdAt DateTime  @default(now())
+  // Diisi admin saat permintaan sudah ditindaklanjuti.
+  resolvedAt DateTime?
+
+  teacher User @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+
+  @@index([teacherId, createdAt])
+  @@index([resolvedAt])
+  @@map("help_requests")
+}
